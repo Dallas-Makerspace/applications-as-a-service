@@ -1,0 +1,123 @@
+---
+version: "2.1"
+
+networks:
+    public:
+    management:
+    frontend:
+    backend:
+
+services:
+    telegraf:
+        restart: on-failure:5
+        image: telegraf:latest
+        build:
+            context: ./data/telegraf
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+            - /var/run/utmp:/var/run/utmp:ro
+        networks
+            - management
+
+    influxdb:
+        image: tutum/influxdb:latest
+        expose:
+            - "2003"
+            - "8083"
+            - "8086"
+        environment:
+            - PRE_CREATE_DB="telegraf"
+        restart: on-failure:5
+        networks:
+            - backend
+
+    grafana:
+        image: grafana/grafana:latest
+        volumes:
+            - ./grafana/dashboards:/var/lib/grafana/dashboards
+        links:
+            - influxdb
+        environment:
+            VIRTUAL_HOST: metrics.local
+            VIRTUAL_PORT: 3000
+            GF_DASHBOARDS_JSON_ENABLED: true
+            GF_DASHBOARDS_JSON_PATH: /var/lib/grafana/dashboards
+            GF_ANALYTICS_ENABLED: false
+        restart: always
+        networks:
+            - frontend
+            - backend
+
+    #snmp agent
+    #ngsyslog
+    proxy:
+        restart: on-failure:5
+        image: jwilder/nginx-proxy:latest
+        environment:
+            DEFAULT_HOST: dashboard.local
+        ports:
+            - "80:80/tcp"
+            - "443:443/tcp"
+        depends_on:
+            - "telegraf"
+            - "watchtower"
+        volumes:
+            - "/var/run/docker.sock:/tmp/docker.sock:ro"
+        networks:
+            - frontend
+            - public
+
+    portainer:
+        restart: on-failure:5
+        environment:
+            VIRTUAL_HOST: dashboard.local
+            VIRTUAL_PORT: 9000
+        image: portainer/portainer:latest
+        command:
+            - "--no-auth"
+            - "-d"
+            - "/data"
+            - "-H"
+            - "unix:///var/run/docker.sock"
+        networks:
+            - management 
+            - frontend
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - /opt/portainer/data:/data
+        depends_on:
+            - "proxy"
+
+    watchtower:
+        restart: on-failure:5
+        mem_limit: 256M
+        image: centurylink/watchtower:latest
+        container_name: watchtower
+        command:
+            - "--cleanup"
+            - "portainer-dashboard"
+            - "eclipse-ce"
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock     
+
+    eclipse-ce:
+        restart: on-failure:5
+        stdin_open: true
+        tty: true
+        mem_limit: 384M
+        container_name: eclipse-che
+        image: eclipse/che:latest
+        environment:
+            VIRTUAL_HOST: "localhost"
+            VIRTUAL_PORT: 8080
+        networks:
+            - frontend
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - /srv/eclipsece:/data
+        command:
+            - "start"
+        depends_on:
+            - "proxy"
+
+# vim: ai:si:sts=4:ts=4:et:tw=80
